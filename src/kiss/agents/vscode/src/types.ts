@@ -11,9 +11,46 @@ export interface Attachment {
   data: string; // Base64 encoded
 }
 
+export type BackendId = 'apiKey' | 'codex';
+export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export type CodexServiceTier = 'standard' | 'fast';
+
+export interface ModelOption {
+  name: string;
+  inp: number;
+  out: number;
+  uses: number;
+  vendor: string;
+  displayName?: string;
+  description?: string;
+  pricingText?: string;
+}
+
+export interface CodexRateLimitInfo {
+  limitId: string;
+  planType?: string | null;
+  primaryUsedPercent?: number | null;
+  primaryResetsAt?: number | null;
+  secondaryUsedPercent?: number | null;
+  secondaryResetsAt?: number | null;
+}
+
+export interface BackendState {
+  activeBackend: BackendId;
+  apiKeysAvailable: boolean;
+  codexAvailable: boolean;
+  codexAuthenticated: boolean;
+  codexAuthMode: 'apikey' | 'chatgpt' | 'chatgptAuthTokens' | null;
+  codexSignInPending: boolean;
+  codexEmail?: string;
+  codexPlanType?: string | null;
+  codexRateLimit?: CodexRateLimitInfo | null;
+  codexError?: string | null;
+}
+
 /** Session/conversation info */
 export interface SessionInfo {
-  id: number;
+  id: number | string;
   title: string;
   timestamp: number;
   preview: string;
@@ -29,6 +66,8 @@ export type FromWebviewMessage =
       attachments: Attachment[];
       useWorktree?: boolean;
       useParallel?: boolean;
+      thinkingEffort?: CodexReasoningEffort;
+      codexServiceTier?: CodexServiceTier;
       tabId?: string;
       workDir?: string;
       skipMerge?: boolean;
@@ -37,6 +76,10 @@ export type FromWebviewMessage =
   | {type: 'stop'; tabId?: string}
   | {type: 'selectModel'; model: string; tabId?: string}
   | {type: 'getModels'}
+  | {type: 'getBackendState'}
+  | {type: 'switchBackend'; backend: BackendId}
+  | {type: 'signInCodex'}
+  | {type: 'signOutCodex'}
   | {type: 'getHistory'; query?: string; offset?: number; generation?: number}
   | {type: 'getFiles'; prefix: string}
   | {type: 'userAnswer'; answer: string; tabId?: string}
@@ -48,7 +91,7 @@ export type FromWebviewMessage =
       tabId?: string;
       restoredTabs?: Array<{tabId: string; chatId: string}>;
     }
-  | {type: 'resumeSession'; id: number; tabId?: string}
+  | {type: 'resumeSession'; id: number | string; tabId?: string}
   | {type: 'getWelcomeSuggestions'}
   | {type: 'complete'; query: string}
   | {type: 'mergeAction'; action: string; tabId?: string}
@@ -118,7 +161,7 @@ type ToWebviewMessageBody =
   | {type: 'system_prompt'; text: string}
   | {type: 'prompt'; text: string}
   // Lifecycle events
-  | {type: 'clear'; chat_id?: number}
+  | {type: 'clear'; chat_id?: number | string}
   | {type: 'showWelcome'}
   | {type: 'clearChat'}
   | {type: 'ensureChat'}
@@ -129,15 +172,10 @@ type ToWebviewMessageBody =
   | {type: 'status'; running: boolean}
   | {
       type: 'models';
-      models: Array<{
-        name: string;
-        inp: number;
-        out: number;
-        uses: number;
-        vendor: string;
-      }>;
+      models: ModelOption[];
       selected: string;
     }
+  | {type: 'backendState'; state: BackendState}
   | {
       type: 'configData';
       config: Record<string, unknown>;
@@ -156,7 +194,12 @@ type ToWebviewMessageBody =
   | {type: 'tasks_updated'}
   | {type: 'welcome_suggestions'; suggestions: Array<{text: string}>}
   | {type: 'remote_url'; url: string}
-  | {type: 'task_events'; events: unknown[]; task?: string; chat_id?: number}
+  | {
+      type: 'task_events';
+      events: unknown[];
+      task?: string;
+      chat_id?: number | string;
+    }
   | {type: 'ghost'; suggestion: string; query: string}
   | {type: 'merge_data'; data: MergeData; hunk_count: number}
   | {type: 'merge_nav'; remaining: number; total: number}
@@ -164,6 +207,19 @@ type ToWebviewMessageBody =
   | {type: 'merge_ended'}
   | {type: 'commitMessage'; message: string; error?: string}
   | {type: 'inputHistory'; tasks: string[]}
+  | {type: 'usage_info'; total_tokens?: number; cost?: string; text?: string}
+  | {
+      type: 'codexTaskPrepared';
+      prompt: string;
+      task: string;
+      taskId: number;
+      workDir?: string;
+      useWorktree?: boolean;
+      useParallel?: boolean;
+      chatId?: number | string;
+    }
+  | {type: 'codexTaskPersisted'; taskId: number}
+  | {type: 'modelUsage'; usage: Record<string, number>; lastModel: string}
   | {type: 'setTaskText'; text: string}
   | {type: 'appendToInput'; text: string}
   | {type: 'focusInput'}
@@ -216,6 +272,9 @@ export interface AgentCommand {
     | 'closeTab'
     | 'generateCommitMessage'
     | 'getInputHistory'
+    | 'prepareCodexTask'
+    | 'persistCodexTask'
+    | 'getModelUsage'
     | 'worktreeAction'
     | 'autocommitAction'
     | 'getAdjacentTask'
@@ -239,6 +298,11 @@ export interface AgentCommand {
   useWorktree?: boolean;
   useParallel?: boolean;
   task?: string;
+  taskId?: number;
+  result?: string;
+  status?: string;
+  error?: string | null;
+  events?: unknown[];
   direction?: 'prev' | 'next';
   tabId?: string;
   skip?: boolean;

@@ -15,6 +15,8 @@
   // State — isRunning mirrors the active tab's tab.isRunning for UI controls
   let isRunning = false;
   let selectedModel = 'claude-opus-4-6';
+  let thinkingEffort = 'medium';
+  let codexServiceTier = 'standard';
   let allModels = [];
   let modelDDIdx = -1;
   let attachments = [];
@@ -22,6 +24,18 @@
   let _noScroll = false;
   let scrollRaf = 0;
   let acIdx = -1;
+  let backendState = null;
+
+  const THINKING_EFFORTS = [
+    {value: 'low', label: 'Low'},
+    {value: 'medium', label: 'Medium'},
+    {value: 'high', label: 'High'},
+    {value: 'xhigh', label: 'Extra high'},
+  ];
+  const CODEX_SERVICE_TIERS = [
+    {value: 'standard', label: 'Standard'},
+    {value: 'fast', label: 'Fast'},
+  ];
 
   // History cycling state
   let histCache = [];
@@ -649,6 +663,7 @@
   );
   const configSidebarClose = document.getElementById('config-sidebar-close');
   const cfgSaveBtn = document.getElementById('cfg-save-btn');
+  const authProviders = document.getElementById('auth-providers');
   const autocommitBtn = document.getElementById('autocommit-btn');
   const waitSpinner = document.getElementById('wait-spinner');
   const ghostOverlay = document.getElementById('ghost-overlay');
@@ -734,6 +749,341 @@
     if (inputClearBtn) inputClearBtn.style.display = inp.value ? '' : 'none';
   }
 
+  function modelDisplayName(name) {
+    const model = allModels.find(entry => entry.name === name);
+    return model && model.displayName ? model.displayName : name;
+  }
+
+  function normalizeThinkingEffort(value) {
+    return THINKING_EFFORTS.some(option => option.value === value)
+      ? value
+      : 'medium';
+  }
+
+  function normalizeCodexServiceTier(value) {
+    if (value === 'flex') return 'standard';
+    return CODEX_SERVICE_TIERS.some(option => option.value === value)
+      ? value
+      : 'standard';
+  }
+
+  function formatErrorText(text) {
+    if (!text) return 'Task failed.';
+    if (typeof text !== 'string') return String(text);
+    try {
+      const parsed = JSON.parse(text);
+      const message =
+        parsed && parsed.error && typeof parsed.error.message === 'string'
+          ? parsed.error.message
+          : '';
+      return message || text;
+    } catch (_) {
+      return text;
+    }
+  }
+
+  function selectThinkingEffort(value, persist) {
+    thinkingEffort = normalizeThinkingEffort(value);
+    renderAuthProviders();
+    if (persist) {
+      vscode.postMessage({
+        type: 'saveConfig',
+        config: {thinking_effort: thinkingEffort},
+        apiKeys: {},
+      });
+    }
+  }
+
+  function selectCodexServiceTier(value, persist) {
+    codexServiceTier = normalizeCodexServiceTier(value);
+    renderAuthProviders();
+    if (persist) {
+      vscode.postMessage({
+        type: 'saveConfig',
+        config: {codex_service_tier: codexServiceTier},
+        apiKeys: {},
+      });
+    }
+  }
+
+  function formatReset(ts) {
+    if (!ts) return '';
+    const seconds = Math.max(0, ts - Math.floor(Date.now() / 1000));
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return minutes + 'm';
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + 'h';
+    return Math.floor(hours / 24) + 'd';
+  }
+
+  const AUTH_PROVIDERS = [
+    {
+      id: 'chatgpt',
+      name: 'ChatGPT',
+      backend: 'codex',
+      description: 'Use your ChatGPT subscription for Codex models.',
+      setupText: 'Uses Codex CLI. It is installed only if you choose ChatGPT.',
+      signInLabel: 'Sign in with ChatGPT',
+      useLabel: 'Use ChatGPT',
+      usingLabel: 'Using ChatGPT',
+      signOutLabel: 'Sign out of ChatGPT',
+      isAvailable: state => state.codexAvailable,
+      isAuthenticated: state => state.codexAuthenticated,
+      isPending: state => state.codexSignInPending,
+      accountText: state => state.codexEmail || 'Signed in',
+      planText: state => state.codexPlanType,
+      rateLimit: state => state.codexRateLimit,
+      errorText: state => state.codexError,
+      messages: {
+        'switch-chatgpt': {type: 'switchBackend', backend: 'codex'},
+        'signin-chatgpt': {type: 'signInCodex'},
+        'signout-chatgpt': {type: 'signOutCodex'},
+      },
+    },
+  ];
+
+  function activeAuthProvider() {
+    if (!backendState) return null;
+    return (
+      AUTH_PROVIDERS.find(provider => {
+        return provider.backend === backendState.activeBackend;
+      }) || null
+    );
+  }
+
+  function renderCodexTierControl(parts) {
+    const selected = normalizeCodexServiceTier(codexServiceTier);
+    parts.push(
+      '<label class="auth-field"><span class="auth-control-label">Mode</span>',
+    );
+    parts.push(
+      '<select class="auth-select-control" data-codex-tier-select' +
+        (isRunning ? ' disabled' : '') +
+        '>',
+    );
+    CODEX_SERVICE_TIERS.forEach(option => {
+      parts.push(
+        '<option value="' +
+          esc(option.value) +
+          '"' +
+          (option.value === selected ? ' selected' : '') +
+          '>' +
+          esc(option.label) +
+          '</option>',
+      );
+    });
+    parts.push('</select></label>');
+  }
+
+  function renderCodexThinkingControl(parts) {
+    const selected = normalizeThinkingEffort(thinkingEffort);
+    parts.push(
+      '<label class="auth-field">' +
+        '<span class="auth-control-label">Thinking</span>',
+    );
+    parts.push(
+      '<select class="auth-select-control" data-codex-thinking-select' +
+        (isRunning ? ' disabled' : '') +
+        '>',
+    );
+    THINKING_EFFORTS.forEach(option => {
+      parts.push(
+        '<option value="' +
+          esc(option.value) +
+          '"' +
+          (option.value === selected ? ' selected' : '') +
+          '>' +
+          esc(option.label) +
+          '</option>',
+      );
+    });
+    parts.push('</select></label>');
+  }
+
+  function renderAuthProvider(parts, provider) {
+    const available = provider.isAvailable(backendState);
+    const authenticated = provider.isAuthenticated(backendState);
+    const pending = provider.isPending(backendState);
+    const active = backendState.activeBackend === provider.backend;
+    const status = authenticated
+      ? active
+        ? 'Active'
+        : 'Signed in'
+      : pending
+        ? 'Pending'
+        : 'Not signed in';
+
+    parts.push('<div class="auth-provider">');
+    parts.push(
+      '<div class="auth-provider-title"><strong>' +
+        esc(provider.name) +
+        '</strong><span>' +
+        esc(status) +
+        '</span></div>',
+    );
+
+    if (authenticated) {
+      parts.push(
+        '<div class="auth-account"><span>' +
+          esc(provider.accountText(backendState)) +
+          '</span></div>',
+      );
+      const plan = provider.planText(backendState);
+      if (plan) {
+        parts.push(
+          '<div class="auth-meta">Plan: ' +
+            esc(String(plan).toUpperCase()) +
+            '</div>',
+        );
+      }
+      const rate = provider.rateLimit(backendState);
+      if (rate) {
+        const primary =
+          rate.primaryUsedPercent != null
+            ? 'Primary ' + rate.primaryUsedPercent + '%'
+            : '';
+        const secondary =
+          rate.secondaryUsedPercent != null
+            ? 'Weekly ' + rate.secondaryUsedPercent + '%'
+            : '';
+        const resets = rate.primaryResetsAt
+          ? 'Reset ' + formatReset(rate.primaryResetsAt)
+          : '';
+        parts.push(
+          '<div class="auth-meta">' +
+            esc([primary, secondary, resets].filter(Boolean).join(' · ')) +
+            '</div>',
+        );
+      }
+      renderCodexTierControl(parts);
+      renderCodexThinkingControl(parts);
+      parts.push(
+        '<button class="auth-action' +
+          (active ? ' active' : '') +
+          '" data-auth-action="switch-' +
+          esc(provider.id) +
+          '"' +
+          (active || isRunning ? ' disabled' : '') +
+          '>' +
+          esc(active ? provider.usingLabel : provider.useLabel) +
+          '</button>',
+      );
+      parts.push(
+        '<button class="auth-action warn" data-auth-action="signout-' +
+          esc(provider.id) +
+          '"' +
+          (isRunning ? ' disabled' : '') +
+          '>' +
+          esc(provider.signOutLabel) +
+          '</button>',
+      );
+    } else if (pending) {
+      parts.push(
+        '<div class="auth-meta">Waiting for ' +
+          esc(provider.name) +
+          ' sign-in to finish...</div>',
+      );
+    } else {
+      parts.push(
+        '<div class="auth-meta">' +
+          esc(available ? provider.description : provider.setupText) +
+          '</div>',
+      );
+      renderCodexTierControl(parts);
+      renderCodexThinkingControl(parts);
+      parts.push(
+        '<button class="auth-action primary" data-auth-action="signin-' +
+          esc(provider.id) +
+          '"' +
+          (isRunning ? ' disabled' : '') +
+          '>' +
+          esc(provider.signInLabel) +
+          '</button>',
+      );
+    }
+
+    const error = provider.errorText(backendState);
+    if (error) {
+      parts.push('<div class="auth-error">' + esc(error) + '</div>');
+    }
+    parts.push('</div>');
+  }
+
+  function renderApiKeyProvider(parts) {
+    const active = backendState.activeBackend === 'apiKey';
+    const status = active
+      ? 'Active'
+      : backendState.apiKeysAvailable
+        ? 'Configured'
+        : 'Not configured';
+    parts.push('<div class="auth-provider">');
+    parts.push(
+      '<div class="auth-provider-title"><strong>API Keys</strong><span>' +
+        esc(status) +
+        '</span></div>',
+    );
+    parts.push(
+      '<div class="auth-meta">Use the API keys saved in this configuration.</div>',
+    );
+    parts.push(
+      '<button class="auth-action' +
+        (active ? ' active' : '') +
+        '" data-auth-action="switch-api"' +
+        (active || isRunning ? ' disabled' : '') +
+        '>' +
+        esc(active ? 'Using API keys' : 'Use API keys') +
+        '</button>',
+    );
+    parts.push('</div>');
+  }
+
+  function renderAuthProviders() {
+    if (!authProviders || !backendState) return;
+    const parts = [];
+    renderApiKeyProvider(parts);
+    parts.push('<div class="auth-section-hdr">ChatGPT Subscription</div>');
+    AUTH_PROVIDERS.forEach(provider => {
+      renderAuthProvider(parts, provider);
+    });
+    authProviders.innerHTML = parts.join('');
+    authProviders.querySelectorAll('[data-auth-action]').forEach(button => {
+      button.addEventListener('click', () => {
+        if (button.disabled) return;
+        const action = button.dataset.authAction;
+        for (const provider of AUTH_PROVIDERS) {
+          const message = provider.messages[action];
+          if (message) {
+            vscode.postMessage(message);
+            return;
+          }
+        }
+        if (action === 'switch-api')
+          vscode.postMessage({type: 'switchBackend', backend: 'apiKey'});
+      });
+    });
+    authProviders
+      .querySelectorAll('[data-codex-tier-select]')
+      .forEach(select => {
+        select.addEventListener('change', () => {
+          if (select.disabled) return;
+          selectCodexServiceTier(select.value, true);
+        });
+      });
+    authProviders
+      .querySelectorAll('[data-codex-thinking-select]')
+      .forEach(select => {
+        select.addEventListener('change', () => {
+          if (select.disabled) return;
+          selectThinkingEffort(select.value, true);
+        });
+      });
+  }
+
+  function setBackendState(nextState) {
+    backendState = nextState;
+    renderAuthProviders();
+  }
+
   // Merge state
   let isMerging = false;
 
@@ -759,6 +1109,47 @@
       bashRaf: 0,
       lastToolCallEl: null,
     };
+  }
+
+  function createThinkingElement() {
+    const el = mkEl('div', 'ev think');
+    el.innerHTML =
+      '<div class="lbl" onclick="toggleThink(this)">' +
+      '<span class="arrow">\u25BE</span> Thinking</div>' +
+      '<div class="cnt"></div>';
+    return el;
+  }
+
+  function llmPanelHasBody(panelEl) {
+    if (
+      !panelEl ||
+      !panelEl.classList ||
+      !panelEl.classList.contains('llm-panel')
+    ) {
+      return true;
+    }
+    for (let i = 0; i < panelEl.children.length; i++) {
+      const child = panelEl.children[i];
+      if (child.classList.contains('llm-panel-hdr')) continue;
+      if (child.classList.contains('think')) {
+        const cnt = child.querySelector('.cnt');
+        if (cnt && cnt.textContent.trim()) return true;
+        continue;
+      }
+      if (child.textContent && child.textContent.trim()) return true;
+    }
+    return false;
+  }
+
+  function updateLlmPanelVisibility(panelEl) {
+    if (
+      !panelEl ||
+      !panelEl.classList ||
+      !panelEl.classList.contains('llm-panel')
+    ) {
+      return;
+    }
+    panelEl.classList.toggle('empty', !llmPanelHasBody(panelEl));
   }
 
   function resetOutputState() {
@@ -1229,20 +1620,21 @@
     const t = ev.type;
     switch (t) {
       case 'thinking_start':
-        tState.thinkEl = mkEl('div', 'ev think');
-        tState.thinkEl.innerHTML =
-          '<div class="lbl" onclick="toggleThink(this)">' +
-          '<span class="arrow">\u25BE</span> Thinking</div>' +
-          '<div class="cnt"></div>';
-        target.appendChild(tState.thinkEl);
+        tState.thinkEl = null;
         break;
-      case 'thinking_delta':
+      case 'thinking_delta': {
+        const text = (ev.text || '').replace(/\n\n+/g, '\n');
+        if (!tState.thinkEl && text.trim()) {
+          tState.thinkEl = createThinkingElement();
+          target.appendChild(tState.thinkEl);
+        }
         if (tState.thinkEl) {
           const tc = tState.thinkEl.querySelector('.cnt');
-          tc.textContent += (ev.text || '').replace(/\n\n+/g, '\n');
+          tc.textContent += text;
           tState.thinkEl.scrollTop = tState.thinkEl.scrollHeight;
         }
         break;
+      }
       case 'thinking_end':
         // Keep the thinking panel expanded so the streamed thinking
         // tokens remain visible after the block ends.  The user can
@@ -1482,6 +1874,7 @@
         break;
       }
     }
+    updateLlmPanelVisibility(target);
   }
 
   function updateStepCount(count) {
@@ -1875,12 +2268,15 @@
         allModels = ev.models || [];
         if (ev.selected) {
           selectedModel = ev.selected;
-          modelName.textContent = ev.selected;
+          modelName.textContent = modelDisplayName(ev.selected);
         }
         renderModelList('');
         break;
       case 'configData':
         populateConfigForm(ev.config || {}, ev.apiKeys || {});
+        break;
+      case 'backendState':
+        setBackendState(ev.state || null);
         break;
       case 'history':
         renderHistory(ev.sessions || [], ev.offset || 0, ev.generation || 0);
@@ -1900,7 +2296,7 @@
       }
       case 'error':
         if (ev.tabId !== undefined && ev.tabId !== activeTabId) break;
-        addError(ev.text);
+        addError(formatErrorText(ev.text));
         break;
       case 'clear': {
         const clearTab =
@@ -2375,6 +2771,19 @@
       case 'task_error':
       case 'task_stopped': {
         const isErr = t === 'task_error';
+        if (isErr && ev.text) {
+          const errorText = formatErrorText(ev.text);
+          if (ev.tabId !== undefined && ev.tabId !== activeTabId) {
+            const bgErrTab = tabs.find(tab => tab.id === ev.tabId);
+            if (bgErrTab && bgErrTab.outputFragment) {
+              bgErrTab.outputFragment.appendChild(
+                createErrorElement(errorText),
+              );
+            }
+          } else {
+            addError(errorText);
+          }
+        }
         markTabDone(ev.tabId, true);
         setReady(isErr ? 'Error' : 'Stopped', ev.tabId);
         break;
@@ -2418,6 +2827,7 @@
       modelBtn.disabled = running;
       if (running) closeModelDD();
     }
+    renderAuthProviders();
     updateInputDisabled();
     updateQueueIndicator();
     if (running) {
@@ -2469,9 +2879,14 @@
     }
   }
 
-  function addError(text) {
+  function createErrorElement(text) {
     const div = mkEl('div', 'ev tr err');
     div.innerHTML = '<strong>Error:</strong> ' + esc(text);
+    return div;
+  }
+
+  function addError(text) {
+    const div = createErrorElement(text);
     O.appendChild(div);
     sb();
   }
@@ -2881,6 +3296,8 @@
       tabId: activeTabId,
       restoredTabs: restoredTabs,
     });
+    vscode.postMessage({type: 'getBackendState'});
+    vscode.postMessage({type: 'getConfig'});
   }
 
   function setupEventListeners() {
@@ -3068,6 +3485,7 @@
         closeModelDD();
         return;
       }
+      positionModelDropdown();
       modelDropdown.classList.add('open');
       modelSearch.value = '';
       if (modelSearchClear) modelSearchClear.style.display = 'none';
@@ -3120,6 +3538,9 @@
       if (!autocomplete.contains(e.target) && e.target !== inp) {
         hideAC();
       }
+    });
+    window.addEventListener('resize', () => {
+      if (modelDropdown.classList.contains('open')) positionModelDropdown();
     });
     historyBtn.addEventListener('click', () => {
       if (sidebar.classList.contains('open')) {
@@ -3295,6 +3716,19 @@
   function sendMessage() {
     const prompt = inp.value.trim();
     if (!prompt) return;
+    if (
+      backendState &&
+      backendState.activeBackend === 'codex' &&
+      !backendState.codexAuthenticated
+    ) {
+      const provider = activeAuthProvider();
+      addError(
+        'Open Configuration and sign in with ' +
+          (provider ? provider.name : 'this provider') +
+          ' first.',
+      );
+      return;
+    }
 
     if (histCache[0] !== prompt) {
       histCache.unshift(prompt);
@@ -3309,6 +3743,8 @@
         curTab.taskQueue.push({
           prompt: prompt,
           model: selectedModel,
+          thinkingEffort: thinkingEffort,
+          codexServiceTier: codexServiceTier,
           attachments: attachments.map(a => ({
             name: a.name,
             mimeType: a.type,
@@ -3345,6 +3781,8 @@
       type: 'submit',
       prompt: prompt,
       model: selectedModel,
+      thinkingEffort: thinkingEffort,
+      codexServiceTier: codexServiceTier,
       tabId: activeTabId,
       attachments: attachments.map(a => {
         return {name: a.name, mimeType: a.type, data: a.data};
@@ -3379,6 +3817,8 @@
       type: 'submit',
       prompt: task.prompt,
       model: task.model,
+      thinkingEffort: task.thinkingEffort || thinkingEffort,
+      codexServiceTier: task.codexServiceTier || codexServiceTier,
       tabId: tab.id,
       attachments: task.attachments || [],
       useWorktree: !!task.useWorktree,
@@ -3556,12 +3996,13 @@
       'div',
       'model-item' + (m.name === selectedModel ? ' active' : ''),
     );
-    const price = '$' + m.inp.toFixed(2) + ' / $' + m.out.toFixed(2);
+    const price =
+      m.pricingText || '$' + m.inp.toFixed(2) + ' / $' + m.out.toFixed(2);
     d.innerHTML =
       '<span>' +
-      esc(m.name) +
+      esc(m.displayName || m.name) +
       '</span><span class="model-cost">' +
-      price +
+      esc(price) +
       '</span>';
     d.addEventListener('click', () => {
       selectModel(m.name);
@@ -3606,10 +4047,31 @@
 
   function selectModel(name) {
     selectedModel = name;
-    modelName.textContent = name;
+    modelName.textContent = modelDisplayName(name);
     closeModelDD();
     renderModelList('');
     vscode.postMessage({type: 'selectModel', model: name, tabId: activeTabId});
+  }
+
+  function positionModelDropdown() {
+    const rect = modelBtn.getBoundingClientRect();
+    const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth;
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    const width = Math.min(380, Math.max(280, rect.width));
+    const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
+    const maxHeight = Math.max(180, Math.min(320, rect.top - 12));
+    modelDropdown.style.setProperty('--model-dropdown-left', left + 'px');
+    modelDropdown.style.setProperty(
+      '--model-dropdown-bottom',
+      viewportHeight - rect.top + 4 + 'px',
+    );
+    modelDropdown.style.setProperty('--model-dropdown-width', width + 'px');
+    modelDropdown.style.setProperty(
+      '--model-dropdown-max-height',
+      maxHeight + 'px',
+    );
   }
 
   function closeModelDD() {
@@ -3705,6 +4167,8 @@
     closeConfigSidebar();
     closeSidebar();
     vscode.postMessage({type: 'getConfig'});
+    vscode.postMessage({type: 'getBackendState'});
+    renderAuthProviders();
     configSidebar.classList.add('open');
     configSidebarOverlay.classList.add('open');
     configBtn.classList.add('open');
@@ -3717,6 +4181,8 @@
   function populateConfigForm(cfg, apiKeys) {
     const el = id => document.getElementById(id);
     el('cfg-max-budget').value = cfg.max_budget != null ? cfg.max_budget : 100;
+    selectThinkingEffort(cfg.thinking_effort, false);
+    selectCodexServiceTier(cfg.codex_service_tier, false);
     el('cfg-custom-endpoint').value = cfg.custom_endpoint || '';
     el('cfg-custom-api-key').value = cfg.custom_api_key || '';
     el('cfg-use-web-browser').checked = cfg.use_web_browser !== false;
@@ -3738,6 +4204,8 @@
     const el = id => document.getElementById(id);
     const cfg = {
       max_budget: parseFloat(el('cfg-max-budget').value) || 100,
+      thinking_effort: normalizeThinkingEffort(thinkingEffort),
+      codex_service_tier: normalizeCodexServiceTier(codexServiceTier),
       custom_endpoint: el('cfg-custom-endpoint').value.trim(),
       custom_api_key: el('cfg-custom-api-key').value.trim(),
       use_web_browser: el('cfg-use-web-browser').checked,

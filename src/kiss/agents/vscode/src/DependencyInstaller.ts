@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as https from 'https';
 import {exec, execSync, spawn} from 'child_process';
 import {findKissProject, findUvPath} from './AgentProcess';
+import {findCodexPath} from './CodexBinary';
 
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || '';
 const LOG_DIR = path.join(HOME_DIR, '.kiss');
@@ -373,12 +374,17 @@ async function ensureDependenciesImpl(): Promise<void> {
 
   log('=== Dependency check finished ===');
 
-  // Prompt for missing API keys (returns true when at least one key is set)
-  const apiKeysReady = await ensureApiKeys();
+  // ChatGPT subscription auth is a supported path. Do not prompt for API keys when
+  // a local Codex CLI can provide ChatGPT subscription auth instead.
+  loadApiKeysFromShellRc();
+  const codexAvailable = !!findCodexPath();
+  const apiKeysReady = codexAvailable
+    ? hasAnyConfiguredApiKeys()
+    : await ensureApiKeys();
 
   // Show restart notification only after API key prompting has completed.
   if (showRestartNotification) {
-    if (apiKeysReady) {
+    if (apiKeysReady || codexAvailable) {
       vscode.window
         .showInformationMessage(
           'KISS Sorcar: Installation complete! Please restart VS Code and any open terminal for changes to take effect.',
@@ -391,8 +397,8 @@ async function ensureDependenciesImpl(): Promise<void> {
         });
     } else {
       vscode.window.showWarningMessage(
-        'KISS Sorcar: Installation complete, but at least one of Claude Code, ANTHROPIC_API_KEY, or OPENAI_API_KEY is required. ' +
-          'Set an API key in your environment or restart VS Code to be prompted again.',
+        'KISS Sorcar: Installation complete, but no model authentication is configured. ' +
+          'Add an API key or sign in with ChatGPT from the chat panel.',
       );
     }
   }
@@ -563,6 +569,67 @@ WantedBy=default.target
       );
     }
   }
+}
+
+export async function installCodexCli(): Promise<boolean> {
+  ensureLocalBinInPath();
+  if (!HOME_DIR) {
+    log('Codex install aborted because HOME is not set');
+    return false;
+  }
+  if (findCodexPath()) return true;
+
+  if (!commandExists('npm')) {
+    log('npm not found, attempting Node.js installation before Codex install');
+    const nodeInstalled = await installNode();
+    if (!nodeInstalled || !commandExists('npm')) {
+      log('Codex install aborted because npm is unavailable');
+      return false;
+    }
+  }
+
+  const prefixDir = path.join(HOME_DIR, '.local');
+  fs.mkdirSync(prefixDir, {recursive: true});
+
+  try {
+    await runAsync(
+      'npm',
+      ['install', '--global', `--prefix=${prefixDir}`, '@openai/codex'],
+      HOME_DIR,
+    );
+  } catch (err) {
+    log(
+      `Codex CLI installation failed: ${err instanceof Error ? err.message : err}`,
+    );
+    return false;
+  }
+
+  try {
+    const rcPath = getShellRcPath();
+    ensurePathInShellRc(
+      rcPath,
+      process.platform === 'win32' ? prefixDir : path.join(prefixDir, 'bin'),
+    );
+  } catch (err) {
+    log(
+      `Failed to persist Codex CLI PATH entry: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
+  const installedPath = findCodexPath();
+  if (!installedPath) {
+    log('Codex CLI install finished but executable was not found on PATH');
+    return false;
+  }
+  if (process.platform !== 'win32') {
+    try {
+      fs.chmodSync(installedPath, 0o755);
+    } catch {
+      /* ignore permission normalization failures */
+    }
+  }
+  log(`Codex CLI installed successfully at ${installedPath}`);
+  return true;
 }
 
 /**
@@ -1138,6 +1205,14 @@ function execPromise(cmd: string): Promise<string> {
 // API Key Setup
 // ---------------------------------------------------------------------------
 
+const API_KEY_ENV_NAMES = [
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
+  'TOGETHER_API_KEY',
+  'OPENROUTER_API_KEY',
+];
+
 /**
  * Get the path to the user's shell rc file based on the SHELL environment variable.
  */
@@ -1368,7 +1443,7 @@ async function promptForApiKey(
  * so API keys set there are invisible to process.env.  This function
  * reads the rc file and populates any missing env vars.
  */
-function loadApiKeysFromShellRc(): void {
+export function loadApiKeysFromShellRc(): void {
   const rcPath = getShellRcPath();
   const content = readShellRc(rcPath);
   if (!content) return;
@@ -1413,7 +1488,12 @@ function loadApiKeysFromShellRc(): void {
  *
  * Returns true when at least one API key is available.
  */
-async function ensureApiKeys(): Promise<boolean> {
+export function hasAnyConfiguredApiKeys(): boolean {
+  loadApiKeysFromShellRc();
+  return API_KEY_ENV_NAMES.some(name => !!process.env[name]);
+}
+
+export async function ensureApiKeys(): Promise<boolean> {
   // Load keys from shell rc into process.env so that keys saved in
   // ~/.zshrc are picked up even when VS Code wasn't launched from a shell.
   loadApiKeysFromShellRc();

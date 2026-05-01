@@ -38,7 +38,7 @@ _HistoryEntry = dict[str, object]
 
 
 _db_conn: sqlite3.Connection | None = None
-_db_lock = threading.Lock()
+_db_lock = threading.RLock()
 
 
 def _close_db() -> None:
@@ -134,16 +134,17 @@ def _get_db() -> sqlite3.Connection:
 
 def _most_recent_task_id(db: sqlite3.Connection, task: str | None) -> int | None:
     """Return the row id of the most recent run of *task*, or the latest row."""
-    if task is not None:
-        row = db.execute(
-            "SELECT id FROM task_history WHERE task = ? "
-            "ORDER BY timestamp DESC LIMIT 1",
-            (task,),
-        ).fetchone()
-    else:
-        row = db.execute(
-            "SELECT id FROM task_history ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
+    with _db_lock:
+        if task is not None:
+            row = db.execute(
+                "SELECT id FROM task_history WHERE task = ? "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (task,),
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT id FROM task_history ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
     return row["id"] if row else None
 
 
@@ -211,7 +212,8 @@ def _load_history(limit: int = 0, offset: int = 0) -> list[_HistoryEntry]:
     db = _get_db()
     effective_limit = limit if limit > 0 else -1
     sql = _HISTORY_SELECT + "ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-    rows = db.execute(sql, (effective_limit, offset)).fetchall()
+    with _db_lock:
+        rows = db.execute(sql, (effective_limit, offset)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -231,12 +233,13 @@ def _prefix_match_task(query: str) -> str:
         return ""
     db = _get_db()
     escaped = query.replace("[", "[[]").replace("*", "[*]").replace("?", "[?]")
-    row = db.execute(
-        "SELECT task FROM task_history "
-        "WHERE task GLOB ? AND LENGTH(task) > ? "
-        "ORDER BY timestamp DESC LIMIT 1",
-        (escaped + "*", len(query)),
-    ).fetchone()
+    with _db_lock:
+        row = db.execute(
+            "SELECT task FROM task_history "
+            "WHERE task GLOB ? AND LENGTH(task) > ? "
+            "ORDER BY timestamp DESC LIMIT 1",
+            (escaped + "*", len(query)),
+        ).fetchone()
     return row["task"] if row else ""
 
 
@@ -257,10 +260,11 @@ def _search_history(
         return _load_history(limit=limit, offset=offset)
     db = _get_db()
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    rows = db.execute(
-        _HISTORY_SELECT + "WHERE task LIKE ? ESCAPE '\\' ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        (f"%{escaped}%", limit, offset),
-    ).fetchall()
+    with _db_lock:
+        rows = db.execute(
+            _HISTORY_SELECT + "WHERE task LIKE ? ESCAPE '\\' ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (f"%{escaped}%", limit, offset),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -274,10 +278,11 @@ def _get_history_entry(idx: int) -> _HistoryEntry | None:
         The entry dict, or ``None`` if the index is out of range.
     """
     db = _get_db()
-    row = db.execute(
-        _HISTORY_SELECT + "ORDER BY timestamp DESC LIMIT 1 OFFSET ?",
-        (idx,),
-    ).fetchone()
+    with _db_lock:
+        row = db.execute(
+            _HISTORY_SELECT + "ORDER BY timestamp DESC LIMIT 1 OFFSET ?",
+            (idx,),
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -394,12 +399,13 @@ def _load_task_chat_id(task: str) -> str:
         The string chat_id, or ``""`` if not found.
     """
     db = _get_db()
-    task_id = _most_recent_task_id(db, task)
-    if task_id is None:
-        return ""
-    row = db.execute(
-        "SELECT chat_id FROM task_history WHERE id = ?", (task_id,)
-    ).fetchone()
+    with _db_lock:
+        task_id = _most_recent_task_id(db, task)
+        if task_id is None:
+            return ""
+        row = db.execute(
+            "SELECT chat_id FROM task_history WHERE id = ?", (task_id,)
+        ).fetchone()
     return str(row["chat_id"]) if row and row["chat_id"] else ""
 
 
@@ -410,9 +416,10 @@ def _load_last_chat_id() -> str:
     the chat_id.
     """
     db = _get_db()
-    row = db.execute(
-        "SELECT chat_id FROM task_history ORDER BY timestamp DESC LIMIT 1"
-    ).fetchone()
+    with _db_lock:
+        row = db.execute(
+            "SELECT chat_id FROM task_history ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
     return str(row["chat_id"]) if row and row["chat_id"] else ""
 
 
@@ -432,28 +439,29 @@ def _list_recent_chats(limit: int = 10) -> list[dict[str, object]]:
         (list of dicts with ``task``, ``result``, ``timestamp``).
     """
     db = _get_db()
-    chat_rows = db.execute(
-        "SELECT chat_id, MAX(timestamp) AS latest "
-        "FROM task_history WHERE chat_id != '' "
-        "GROUP BY chat_id ORDER BY latest DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    result: list[dict[str, object]] = []
-    for cr in chat_rows:
-        cid = cr["chat_id"]
-        tasks = db.execute(
-            "SELECT task, result, timestamp FROM task_history "
-            "WHERE chat_id = ? ORDER BY timestamp ASC",
-            (cid,),
+    with _db_lock:
+        chat_rows = db.execute(
+            "SELECT chat_id, MAX(timestamp) AS latest "
+            "FROM task_history WHERE chat_id != '' "
+            "GROUP BY chat_id ORDER BY latest DESC LIMIT ?",
+            (limit,),
         ).fetchall()
-        result.append({
-            "chat_id": cid,
-            "tasks": [
-                {"task": t["task"], "result": t["result"],
-                 "timestamp": t["timestamp"]}
-                for t in tasks
-            ],
-        })
+        result: list[dict[str, object]] = []
+        for cr in chat_rows:
+            cid = cr["chat_id"]
+            tasks = db.execute(
+                "SELECT task, result, timestamp FROM task_history "
+                "WHERE chat_id = ? ORDER BY timestamp ASC",
+                (cid,),
+            ).fetchall()
+            result.append({
+                "chat_id": cid,
+                "tasks": [
+                    {"task": t["task"], "result": t["result"],
+                     "timestamp": t["timestamp"]}
+                    for t in tasks
+                ],
+            })
     return result
 
 
@@ -476,20 +484,21 @@ def _load_latest_chat_events_by_chat_id(
     if not chat_id:
         return None
     db = _get_db()
-    row = db.execute(
-        "SELECT id, task, extra FROM task_history "
-        "WHERE chat_id = ? ORDER BY timestamp DESC LIMIT 1",
-        (chat_id,),
-    ).fetchone()
-    if not row:
-        return None
-    task_id = row["id"]
-    task = row["task"]
-    extra_str = row["extra"] or ""
-    event_rows = db.execute(
-        "SELECT event_json, timestamp FROM events WHERE task_id = ? ORDER BY seq",
-        (task_id,),
-    ).fetchall()
+    with _db_lock:
+        row = db.execute(
+            "SELECT id, task, extra FROM task_history "
+            "WHERE chat_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+        if not row:
+            return None
+        task_id = row["id"]
+        task = row["task"]
+        extra_str = row["extra"] or ""
+        event_rows = db.execute(
+            "SELECT event_json, timestamp FROM events WHERE task_id = ? ORDER BY seq",
+            (task_id,),
+        ).fetchall()
     events: list[dict[str, object]] = []
     for r in event_rows:
         try:
@@ -520,40 +529,41 @@ def _get_adjacent_task_by_chat_id(
     if not chat_id or not current_task:
         return None
     db = _get_db()
-    row = db.execute(
-        "SELECT id, timestamp FROM task_history "
-        "WHERE chat_id = ? AND task = ? "
-        "ORDER BY timestamp DESC LIMIT 1",
-        (chat_id, current_task),
-    ).fetchone()
-    if not row:
-        return None
-    ts = row["timestamp"]
-
-    if direction == "prev":
-        adj = db.execute(
-            "SELECT id, task FROM task_history "
-            "WHERE chat_id = ? AND timestamp < ? "
+    with _db_lock:
+        row = db.execute(
+            "SELECT id, timestamp FROM task_history "
+            "WHERE chat_id = ? AND task = ? "
             "ORDER BY timestamp DESC LIMIT 1",
-            (chat_id, ts),
+            (chat_id, current_task),
         ).fetchone()
-    else:
-        adj = db.execute(
-            "SELECT id, task FROM task_history "
-            "WHERE chat_id = ? AND timestamp > ? "
-            "ORDER BY timestamp ASC LIMIT 1",
-            (chat_id, ts),
-        ).fetchone()
+        if not row:
+            return None
+        ts = row["timestamp"]
 
-    if not adj:
-        return None
+        if direction == "prev":
+            adj = db.execute(
+                "SELECT id, task FROM task_history "
+                "WHERE chat_id = ? AND timestamp < ? "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (chat_id, ts),
+            ).fetchone()
+        else:
+            adj = db.execute(
+                "SELECT id, task FROM task_history "
+                "WHERE chat_id = ? AND timestamp > ? "
+                "ORDER BY timestamp ASC LIMIT 1",
+                (chat_id, ts),
+            ).fetchone()
 
-    adj_id = adj["id"]
-    adj_task = adj["task"]
-    event_rows = db.execute(
-        "SELECT event_json, timestamp FROM events WHERE task_id = ? ORDER BY seq",
-        (adj_id,),
-    ).fetchall()
+        if not adj:
+            return None
+
+        adj_id = adj["id"]
+        adj_task = adj["task"]
+        event_rows = db.execute(
+            "SELECT event_json, timestamp FROM events WHERE task_id = ? ORDER BY seq",
+            (adj_id,),
+        ).fetchall()
     events: list[dict[str, object]] = []
     for r in event_rows:
         try:
@@ -578,27 +588,30 @@ def _load_chat_context(chat_id: str) -> list[_HistoryEntry]:
     if not chat_id:
         return []
     db = _get_db()
-    rows = db.execute(
-        "SELECT task, result FROM task_history "
-        "WHERE chat_id = ? ORDER BY timestamp ASC",
-        (chat_id,),
-    ).fetchall()
+    with _db_lock:
+        rows = db.execute(
+            "SELECT task, result FROM task_history "
+            "WHERE chat_id = ? ORDER BY timestamp ASC",
+            (chat_id,),
+        ).fetchall()
     return [{"task": r["task"], "result": r["result"]} for r in rows]
 
 
 def _load_model_usage() -> dict[str, int]:
     """Return model usage counts as ``{model_name: count}``."""
     db = _get_db()
-    rows = db.execute("SELECT model, count FROM model_usage").fetchall()
+    with _db_lock:
+        rows = db.execute("SELECT model, count FROM model_usage").fetchall()
     return {r["model"]: r["count"] for r in rows}
 
 
 def _load_last_model() -> str:
     """Return the name of the most recently selected model, or ``""``."""
     db = _get_db()
-    row = db.execute(
-        "SELECT model FROM model_usage WHERE is_last = 1 LIMIT 1"
-    ).fetchone()
+    with _db_lock:
+        row = db.execute(
+            "SELECT model FROM model_usage WHERE is_last = 1 LIMIT 1"
+        ).fetchone()
     return row["model"] if row else ""
 
 
@@ -641,9 +654,10 @@ def _load_file_usage() -> dict[str, int]:
     derive recency from key position.
     """
     db = _get_db()
-    rows = db.execute(
-        "SELECT path, count FROM file_usage ORDER BY last_used ASC"
-    ).fetchall()
+    with _db_lock:
+        rows = db.execute(
+            "SELECT path, count FROM file_usage ORDER BY last_used ASC"
+        ).fetchall()
     return {r["path"]: r["count"] for r in rows}
 
 
@@ -665,5 +679,3 @@ def _record_file_usage(path: str) -> None:
                 (_MAX_FILE_USAGE_ENTRIES,),
             )
         db.commit()
-
-

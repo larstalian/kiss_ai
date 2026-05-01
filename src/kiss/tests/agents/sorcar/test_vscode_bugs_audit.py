@@ -184,7 +184,7 @@ class TestHunkToDictAsymmetry(unittest.TestCase):
 # ===================================================================
 
 class TestFinishMergeRedundantLookup(unittest.TestCase):
-    """R1 fix: ``_finish_merge`` now performs a single tab lookup."""
+    """R1 fix: ``_finish_merge`` gets the tab once through ``_get_tab``."""
 
     def test_source_has_one_tab_lookup(self) -> None:
         """Structural: only one tab lookup in ``_finish_merge``."""
@@ -194,6 +194,7 @@ class TestFinishMergeRedundantLookup(unittest.TestCase):
         assert len(matches) == 1, (
             f"R1 fix: expected 1 lookup, found {len(matches)}"
         )
+        assert "_tab_states.get(tab_id)" not in src
 
     def test_autocommit_prompt_not_lost_after_tab_removal(self) -> None:
         """Behavioral: the autocommit check uses the tab ref from the

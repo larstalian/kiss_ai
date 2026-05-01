@@ -20,6 +20,8 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 
 DEFAULTS: dict[str, Any] = {
     "max_budget": 100,
+    "thinking_effort": "medium",
+    "codex_service_tier": "standard",
     "custom_endpoint": "",
     "custom_api_key": "",
     "use_web_browser": True,
@@ -64,6 +66,10 @@ def load_config() -> dict[str, Any]:
                 result.update(stored)
         except (json.JSONDecodeError, OSError):
             logger.debug("Failed to read config", exc_info=True)
+    if result.get("codex_service_tier") == "flex":
+        result["codex_service_tier"] = "standard"
+    elif result.get("codex_service_tier") not in {"standard", "fast"}:
+        result["codex_service_tier"] = DEFAULTS["codex_service_tier"]
     return result
 
 
@@ -91,6 +97,11 @@ def save_config(data: dict[str, Any]) -> None:
     for k in DEFAULTS:
         if k in data:
             existing[k] = data[k]
+    if "codex_service_tier" in existing:
+        if existing["codex_service_tier"] == "flex":
+            existing["codex_service_tier"] = "standard"
+        elif existing["codex_service_tier"] not in {"standard", "fast"}:
+            existing["codex_service_tier"] = DEFAULTS["codex_service_tier"]
     with open(CONFIG_PATH, "w") as f:
         json.dump(existing, f, indent=2)
 

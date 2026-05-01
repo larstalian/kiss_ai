@@ -87,6 +87,17 @@ class ChatSorcarAgent(SorcarAgent):
         parts.append("---\n")
         return "\n\n".join(parts) + "# Task (work on it now)\n\n" + prompt
 
+    def prepare_task(self, prompt_template: str) -> tuple[int, str]:
+        """Persist a task and return its history id with the augmented prompt."""
+        agent_prompt = self.build_chat_prompt(prompt_template)
+        task_id, self._chat_id = _add_task(prompt_template, chat_id=self._chat_id)
+        self._last_task_id = task_id
+        return task_id, agent_prompt
+
+    def persist_task_result(self, task_id: int, result_summary: str) -> None:
+        """Persist the result summary for a prepared task."""
+        _save_task_result(task_id=task_id, result=result_summary)
+
     def run(  # type: ignore[override]
         self,
         prompt_template: str = "",
@@ -110,9 +121,7 @@ class ChatSorcarAgent(SorcarAgent):
             YAML string with 'success' and 'summary' keys.
         """
         skip_persistence = kwargs.pop("_skip_persistence", False)
-        agent_prompt = self.build_chat_prompt(prompt_template)
-        task_id, self._chat_id = _add_task(prompt_template, chat_id=self._chat_id)
-        self._last_task_id = task_id
+        task_id, agent_prompt = self.prepare_task(prompt_template)
 
         result_summary = ""
         try:
@@ -129,7 +138,7 @@ class ChatSorcarAgent(SorcarAgent):
             raise
         finally:
             if not skip_persistence:
-                _save_task_result(task_id=task_id, result=result_summary)
+                self.persist_task_result(task_id, result_summary)
                 from kiss._version import __version__
 
                 _save_task_extra(
@@ -144,6 +153,5 @@ class ChatSorcarAgent(SorcarAgent):
                     },
                     task_id=task_id,
                 )
-
 
 

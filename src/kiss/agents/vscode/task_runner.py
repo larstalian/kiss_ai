@@ -155,6 +155,18 @@ class _TaskRunnerMixin:
         tab = self._get_tab(tab_id)
         model = cmd.get("model") or tab.selected_model
 
+        with self._state_lock:
+            if tab.is_merging:
+                self.printer.broadcast(
+                    {
+                        "type": "error",
+                        "text": "Cannot run a task while merge review is in progress."
+                        " Accept or reject all changes first.",
+                        "tabId": tab_id,
+                    }
+                )
+                return
+
         available = get_available_models()
         if not available or (model and model not in available):
             no_model_msg = (
@@ -171,16 +183,6 @@ class _TaskRunnerMixin:
             return
 
         with self._state_lock:
-            if tab.is_merging:
-                self.printer.broadcast(
-                    {
-                        "type": "error",
-                        "text": "Cannot run a task while merge review is in progress."
-                        " Accept or reject all changes first.",
-                        "tabId": tab_id,
-                    }
-                )
-                return
             tab.use_worktree = bool(cmd.get("useWorktree", False))
             tab.use_parallel = bool(cmd.get("useParallel", False))
             tab.is_task_active = True

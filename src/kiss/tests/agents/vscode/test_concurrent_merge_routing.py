@@ -101,15 +101,28 @@ class TestConcurrentMergeRouting(unittest.TestCase):
 
     def test_merge_data_handler_creates_per_tab_manager(self) -> None:
         """merge_data handler must call _getOrCreateMergeManager."""
-        idx = _SIDEBAR_TS.index("msg.type === 'merge_data'")
+        idx = _SIDEBAR_TS.index("msg.type !== 'merge_data'")
         block = _SIDEBAR_TS[idx : idx + 500]
         assert "_getOrCreateMergeManager" in block
 
+    def test_codex_listener_routes_merge_data(self) -> None:
+        """Codex backend messages must also create a MergeManager."""
+        idx = _SIDEBAR_TS.index("backend.events.on('message'")
+        block = _SIDEBAR_TS[idx : idx + 900]
+        assert "_handleMergeData(msg)" in block
+
     def test_merge_data_handler_no_deferral(self) -> None:
         """merge_data handler must NOT defer — no _pendingMergeData."""
-        idx = _SIDEBAR_TS.index("msg.type === 'merge_data'")
+        idx = _SIDEBAR_TS.index("msg.type !== 'merge_data'")
         block = _SIDEBAR_TS[idx : idx + 500]
         assert "_pendingMergeData" not in block
+
+    def test_codex_merge_done_routes_to_codex_backend(self) -> None:
+        """Codex merge completion must not be sent to the Python process."""
+        idx = _SIDEBAR_TS.index("mgr.on('allDone'")
+        block = _SIDEBAR_TS[idx : idx + 900]
+        assert "backend === 'codex'" in block
+        assert ".finishMerge(tabId)" in block
 
     def test_merge_action_routes_to_tab_manager(self) -> None:
         """mergeAction handler must look up manager from _mergeManagers."""

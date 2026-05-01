@@ -67,6 +67,7 @@ class _TabState:
         "is_task_active",
         "skip_merge",
         "deferred_snapshot",
+        "codex_snapshot",
     )
 
     def __init__(self, tab_id: str, default_model: str) -> None:
@@ -91,3 +92,4 @@ class _TabState:
             ]
             | None
         ) = None
+        self.codex_snapshot = None

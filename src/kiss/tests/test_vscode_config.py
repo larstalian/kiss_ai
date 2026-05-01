@@ -76,6 +76,8 @@ class TestLoadSaveConfig:
     def test_save_and_load(self) -> None:
         data = {
             "max_budget": 50,
+            "thinking_effort": "high",
+            "codex_service_tier": "fast",
             "custom_endpoint": "http://localhost:8080/v1",
             "custom_api_key": "sk-test",
             "use_web_browser": False,
@@ -84,6 +86,8 @@ class TestLoadSaveConfig:
         save_config(data)
         loaded = load_config()
         assert loaded["max_budget"] == 50
+        assert loaded["thinking_effort"] == "high"
+        assert loaded["codex_service_tier"] == "fast"
         assert loaded["custom_endpoint"] == "http://localhost:8080/v1"
         assert loaded["use_web_browser"] is False
         assert loaded["remote_password"] == "secret"
@@ -114,8 +118,19 @@ class TestLoadSaveConfig:
         (cfg_dir / "config.json").write_text('{"max_budget": 42}')
         cfg = load_config()
         assert cfg["max_budget"] == 42
+        assert cfg["thinking_effort"] == "medium"
         assert cfg["use_web_browser"] is True  # default
         assert cfg["custom_endpoint"] == ""  # default
+
+    def test_load_normalizes_legacy_codex_service_tier(self) -> None:
+        cfg_dir = Path.home() / ".kiss"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text('{"codex_service_tier": "flex"}')
+        assert load_config()["codex_service_tier"] == "standard"
+
+    def test_save_normalizes_legacy_codex_service_tier(self) -> None:
+        save_config({"codex_service_tier": "flex"})
+        assert load_config()["codex_service_tier"] == "standard"
 
     def test_load_with_extra_stored_keys(self) -> None:
         """Stored config with extra keys preserves them in loaded dict."""
@@ -466,6 +481,8 @@ class TestCommandHandlerIntegration:
         cfg_events = [e for e in events if e["type"] == "configData"]
         assert len(cfg_events) == 1
         assert cfg_events[0]["config"]["max_budget"] == 100
+        assert cfg_events[0]["config"]["thinking_effort"] == "medium"
+        assert cfg_events[0]["config"]["codex_service_tier"] == "standard"
         assert cfg_events[0]["config"]["use_web_browser"] is True
 
     def test_save_config_persists_and_broadcasts(
@@ -474,13 +491,20 @@ class TestCommandHandlerIntegration:
         server, captured = self._capture_broadcasts(monkeypatch)
         server._handle_command({
             "type": "saveConfig",
-            "config": {"max_budget": 25, "use_web_browser": False},
+            "config": {
+                "max_budget": 25,
+                "thinking_effort": "high",
+                "codex_service_tier": "fast",
+                "use_web_browser": False,
+            },
             "apiKeys": {},
         })
         events = self._parse_events(captured)
         cfg_events = [e for e in events if e["type"] == "configData"]
         assert len(cfg_events) == 1
         assert cfg_events[0]["config"]["max_budget"] == 25
+        assert cfg_events[0]["config"]["thinking_effort"] == "high"
+        assert cfg_events[0]["config"]["codex_service_tier"] == "fast"
         assert cfg_events[0]["config"]["use_web_browser"] is False
         # Verify persisted to disk
         assert load_config()["max_budget"] == 25

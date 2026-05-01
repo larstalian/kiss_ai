@@ -16,7 +16,10 @@ export function activate(context: vscode.ExtensionContext): void {
   console.log('KISS Sorcar extension activating...');
 
   // --- Secondary sidebar chat view ---
-  sidebarView = new SorcarSidebarView(context.extensionUri);
+  sidebarView = new SorcarSidebarView(
+    context.extensionUri,
+    context.globalState,
+  );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       'kissSorcar.chatViewSecondary',

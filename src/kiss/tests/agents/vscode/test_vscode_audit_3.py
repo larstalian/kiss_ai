@@ -110,14 +110,13 @@ class TestTimerFlushTypeAnnotation(unittest.TestCase):
 
 
 # ===================================================================
-# N2 — _await_user_response reads _tab_states without _state_lock
+# N2 — _await_user_response reads _tab_states under _state_lock
 # ===================================================================
 
 
-class TestAwaitUserResponseNoLock(unittest.TestCase):
+class TestAwaitUserResponseLock(unittest.TestCase):
     """N2: ``_await_user_response`` reads ``self._tab_states.get(tab_id)``
-    without holding ``_state_lock``, creating a data race with
-    ``_close_tab`` which pops the entry under the lock.
+    while holding ``_state_lock``, matching ``_close_tab`` writes.
     """
 
     def test_source_has_lock_around_tab_states_get(self) -> None:

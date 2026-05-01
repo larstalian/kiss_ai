@@ -2449,6 +2449,8 @@ class TestSorcarSidebarViewMessageHandling(unittest.TestCase):
             "resumeSession", "getAdjacentTask",
             "complete", "mergeAction", "generateCommitMessage",
             "worktreeAction", "resolveDroppedPaths", "focusEditor",
+            "getBackendState", "switchBackend", "signInCodex",
+            "signOutCodex",
         }
         missing = required - sidebar_cases
         assert not missing, f"Sidebar is missing message handlers: {missing}"
@@ -2466,6 +2468,8 @@ class TestSorcarSidebarViewMessageHandling(unittest.TestCase):
             "closeTab", "getWelcomeSuggestions",
             "webviewFocusChanged", "autocommitAction", "setSkipMerge",
             "getConfig", "saveConfig",
+            "getBackendState", "switchBackend", "signInCodex",
+            "signOutCodex",
         }
         extra = sidebar_cases - known
         assert not extra, f"Sidebar has extra message handlers: {extra}"

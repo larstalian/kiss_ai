@@ -57,6 +57,27 @@ class _CommandsMixin:
         def _get_adjacent_task(
             self, chat_id: str, task: str, direction: str, tab_id: str = "",
         ) -> None: ...
+        def _get_model_usage(self, tab_id: str = "") -> None: ...
+        def _prepare_codex_task(
+            self,
+            prompt: str,
+            tab_id: str = "",
+            work_dir: str | None = None,
+            use_worktree: bool = False,
+            use_parallel: bool = False,
+            skip_merge: bool = False,
+        ) -> None: ...
+        def _persist_codex_task(
+            self,
+            task_id: Any,
+            task: str,
+            result: str,
+            events: Any,
+            model: str,
+            status: str = "completed",
+            error: str | None = None,
+            tab_id: str = "",
+        ) -> None: ...
         def _generate_commit_message(self) -> None: ...
         def _handle_worktree_action(
             self, action: str, tab_id: str = "",
@@ -195,6 +216,34 @@ class _CommandsMixin:
         """Send deduplicated task texts for arrow-key cycling."""
         self._get_input_history()
 
+    def _cmd_get_model_usage(self, cmd: dict[str, Any]) -> None:
+        """Send persisted model usage for Codex model list decoration."""
+        self._get_model_usage(cmd.get("tabId", ""))
+
+    def _cmd_prepare_codex_task(self, cmd: dict[str, Any]) -> None:
+        """Prepare a Codex task through the standard KISS chat prompt path."""
+        self._prepare_codex_task(
+            cmd.get("prompt", ""),
+            cmd.get("tabId", ""),
+            cmd.get("workDir"),
+            bool(cmd.get("useWorktree", False)),
+            bool(cmd.get("useParallel", False)),
+            bool(cmd.get("skipMerge", False)),
+        )
+
+    def _cmd_persist_codex_task(self, cmd: dict[str, Any]) -> None:
+        """Persist a completed Codex task into KISS history."""
+        self._persist_codex_task(
+            cmd.get("taskId"),
+            cmd.get("prompt", ""),
+            cmd.get("result", ""),
+            cmd.get("events", []),
+            cmd.get("model", ""),
+            cmd.get("status", "completed"),
+            cmd.get("error"),
+            cmd.get("tabId", ""),
+        )
+
     def _cmd_get_adjacent_task(self, cmd: dict[str, Any]) -> None:
         """Send events for the adjacent task in the same chat session.
 
@@ -265,7 +314,8 @@ class _CommandsMixin:
 
         cfg = cmd.get("config", {})
         save_config(cfg)
-        apply_config_to_env(cfg)
+        new_cfg = load_config()
+        apply_config_to_env(new_cfg)
 
         api_keys = cmd.get("apiKeys", {})
         for key_name, key_value in api_keys.items():
@@ -275,8 +325,6 @@ class _CommandsMixin:
         # Refresh models list so custom endpoint and new API keys show up
         self._get_models()
 
-        # Reload config to verify
-        new_cfg = load_config()
         self.printer.broadcast({"type": "configData", "config": new_cfg})
 
     def _cmd_set_skip_merge(self, cmd: dict[str, Any]) -> None:
@@ -315,4 +363,7 @@ class _CommandsMixin:
         "setSkipMerge": _cmd_set_skip_merge,
         "getConfig": _cmd_get_config,
         "saveConfig": _cmd_save_config,
+        "getModelUsage": _cmd_get_model_usage,
+        "prepareCodexTask": _cmd_prepare_codex_task,
+        "persistCodexTask": _cmd_persist_codex_task,
     }
